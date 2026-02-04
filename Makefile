@@ -27,11 +27,17 @@ package: build
 release: package
 	@echo "Creating release output..."
 	@mkdir -p release
-	@cp *.vsix release/ 2>/dev/null || true
-	@echo "Release files copied to release/ directory"
-	@ls -lh release/
+	@if ls *.vsix 1> /dev/null 2>&1; then \
+		cp *.vsix release/; \
+		echo "Release files copied to release/ directory"; \
+		ls -lh release/; \
+	else \
+		echo "Error: No VSIX file found. Run 'make package' first."; \
+		exit 1; \
+	fi
 
-# Clean build artifacts
+# Clean build artifacts (preserves node_modules for faster rebuilds)
+# Use 'rm -rf node_modules' separately for a complete clean
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -rf dist out node_modules/.cache
