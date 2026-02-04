@@ -43,6 +43,36 @@ The extension provides the following settings (accessible via Settings → Exten
 4. Runs make commands in detached processes for better control
 5. Shows output in dedicated output channels (not visible terminals)
 
+## Development
+
+### Building and Packaging
+
+This extension includes a Makefile for building and packaging:
+
+```bash
+make install   # Install npm dependencies
+make build     # Compile TypeScript and bundle with webpack
+make package   # Create VSIX package file
+make release   # Build and create release output (VSIX in release/)
+make clean     # Remove build artifacts and release files
+make help      # Show available commands
+```
+
+### Creating a Release
+
+To create a release package:
+
+```bash
+make release
+```
+
+This will:
+1. Build the extension using webpack
+2. Package it into a VSIX file using vsce
+3. Copy the VSIX file to the `release/` directory
+
+The generated VSIX file can be installed in VS Code or published to the marketplace.
+
 ## Limitations
 - Doesn't support .PHONY, dependencies, or multi-line targets (yet)
 - Assumes GNU make is installed and available in PATH
