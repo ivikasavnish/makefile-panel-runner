@@ -20,15 +20,45 @@
   "homepage": "https://github.com/sapondanaisriwan/makefile-runner",
   "icon": "icon.png",
   "contributes": {
-    "views": {
-      "explorer": [
+    "viewsContainers": {
+      "activitybar": [
         {
-          "icon": "icon.png",
-          "id": "makefileScripts",
-          "name": "Make Runner",
-          "when": "workspaceFolderCount != 0"
+          "id": "makefileRunner",
+          "title": "Make Runner",
+          "icon": "$(tools)"
         }
       ]
+    },
+    "views": {
+      "makefileRunner": [
+        {
+          "icon": "$(tools)",
+          "id": "makefileScripts",
+          "name": "Make Targets",
+          "when": "workspaceFolderCount != 0",
+          "order": 2
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Makefile Runner",
+      "properties": {
+        "makefileRunner.singletonTerminal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use a single terminal for all make commands"
+        },
+        "makefileRunner.showTerminal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically show terminal when running make commands"
+        },
+        "makefileRunner.watchMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable watch mode for make targets"
+        }
+      }
     },
     "commands": [
       {
@@ -42,8 +72,19 @@
         "icon": "$(play)"
       },
       {
+        "command": "makefileRunner.stopTarget",
+        "title": "Stop Make Target",
+        "icon": "$(debug-stop)"
+      },
+      {
         "command": "makefileRunner.openTarget",
-        "title": "Open in Makefile"
+        "title": "Open in Makefile",
+        "icon": "$(go-to-file)"
+      },
+      {
+        "command": "makefileRunner.toggleWatch",
+        "title": "Toggle Watch Mode",
+        "icon": "$(eye-watch)"
       }
     ],
     "menus": {
@@ -51,17 +92,29 @@
         {
           "command": "makefileRunner.refresh",
           "when": "view == makefileScripts",
-          "group": "navigation"
+          "group": "navigation@1"
+        },
+        {
+          "command": "makefileRunner.toggleWatch",
+          "when": "view == makefileScripts",
+          "group": "navigation@2"
         }
       ],
       "view/item/context": [
         {
           "command": "makefileRunner.runTarget",
           "when": "view == makefileScripts && viewItem == makeTarget",
-          "group": "inline",
-          "args": [
-            "${viewItem}"
-          ]
+          "group": "inline@1"
+        },
+        {
+          "command": "makefileRunner.stopTarget",
+          "when": "view == makefileScripts && viewItem == makeTargetRunning",
+          "group": "inline@1"
+        },
+        {
+          "command": "makefileRunner.openTarget",
+          "when": "view == makefileScripts && viewItem =~ /makeTarget/",
+          "group": "navigation"
         }
       ]
     }
