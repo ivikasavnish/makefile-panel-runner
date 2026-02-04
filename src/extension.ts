@@ -5,7 +5,6 @@ import * as cp from "child_process";
 
 // Global state for running processes
 const runningProcesses: Map<string, cp.ChildProcess> = new Map();
-let singletonTerminal: vscode.Terminal | undefined;
 let watchModeEnabled = false;
 
 export function activate(context: vscode.ExtensionContext) {
@@ -54,8 +53,6 @@ export function activate(context: vscode.ExtensionContext) {
       
       // Use detached process for better control
       try {
-        const makeCommand = watchMode ? `make ${targetName} watch` : `make ${targetName}`;
-        
         // Run in detached mode
         const child = cp.spawn("make", watchMode ? [targetName, "watch"] : [targetName], {
           cwd: cwd,
@@ -115,9 +112,20 @@ export function activate(context: vscode.ExtensionContext) {
       const process = runningProcesses.get(targetName);
       
       if (process) {
-        // Kill the process group
+        // Kill the process group (negative PID kills the entire group)
         try {
-          process.kill("SIGTERM");
+          if (process.pid) {
+            // Kill the entire process group
+            process.kill("SIGTERM");
+            // Also attempt to kill the process group if on Unix-like systems
+            if (require("os").platform() !== "win32") {
+              try {
+                cp.execSync(`kill -TERM -${process.pid}`);
+              } catch {
+                // Ignore errors if process group is already dead
+              }
+            }
+          }
           runningProcesses.delete(targetName);
           target.setRunning(false);
           makefileProvider.refresh();
