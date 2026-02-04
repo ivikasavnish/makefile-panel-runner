@@ -1,5 +1,6 @@
 *.vsix
 node_modules
 dist
+out
 .vscode-test
 .env

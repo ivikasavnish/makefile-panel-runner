@@ -3,23 +3,132 @@ import * as fs from "fs";
 import * as path from "path";
 import * as cp from "child_process";
 
+// Global state for running processes
+const runningProcesses: Map<string, cp.ChildProcess> = new Map();
+let singletonTerminal: vscode.Terminal | undefined;
+let watchModeEnabled = false;
+
 export function activate(context: vscode.ExtensionContext) {
   const makefileProvider = new MakefileTreeProvider();
 
   vscode.window.registerTreeDataProvider("makefileScripts", makefileProvider);
+  
   vscode.commands.registerCommand("makefileRunner.refresh", () =>
     makefileProvider.refresh()
   );
+  
+  vscode.commands.registerCommand("makefileRunner.toggleWatch", () => {
+    watchModeEnabled = !watchModeEnabled;
+    const message = watchModeEnabled 
+      ? "Watch mode enabled - terminals will stay open"
+      : "Watch mode disabled";
+    vscode.window.showInformationMessage(message);
+  });
+  
   vscode.commands.registerCommand(
     "makefileRunner.runTarget",
-    (target: string | MakeTarget) => {
+    async (target: string | MakeTarget) => {
       // Handle both string and MakeTarget object
       const targetName = typeof target === "string" ? target : target.label;
-      const terminal = vscode.window.createTerminal("Makefile Runner");
-      terminal.sendText(`make ${targetName}`);
-      terminal.show();
+      
+      // Get configuration
+      const config = vscode.workspace.getConfiguration("makefileRunner");
+      const useSingleton = config.get<boolean>("singletonTerminal", true);
+      const showTerminal = config.get<boolean>("showTerminal", false);
+      const watchMode = config.get<boolean>("watchMode", false) || watchModeEnabled;
+      
+      // Mark target as running if it's a MakeTarget object
+      if (typeof target !== "string") {
+        target.setRunning(true);
+        makefileProvider.refresh();
+      }
+      
+      // Get workspace folder
+      const workspaceFolders = vscode.workspace.workspaceFolders;
+      if (!workspaceFolders) {
+        vscode.window.showErrorMessage("No workspace folder found");
+        return;
+      }
+      
+      const cwd = workspaceFolders[0].uri.fsPath;
+      
+      // Use detached process for better control
+      try {
+        const makeCommand = watchMode ? `make ${targetName} watch` : `make ${targetName}`;
+        
+        // Run in detached mode
+        const child = cp.spawn("make", watchMode ? [targetName, "watch"] : [targetName], {
+          cwd: cwd,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+        
+        // Store the process
+        runningProcesses.set(targetName, child);
+        
+        // Create output channel for the target
+        const outputChannel = vscode.window.createOutputChannel(`Make: ${targetName}`);
+        
+        child.stdout?.on("data", (data) => {
+          outputChannel.append(data.toString());
+        });
+        
+        child.stderr?.on("data", (data) => {
+          outputChannel.append(data.toString());
+        });
+        
+        child.on("exit", (code) => {
+          runningProcesses.delete(targetName);
+          if (typeof target !== "string") {
+            target.setRunning(false);
+            makefileProvider.refresh();
+          }
+          
+          if (code === 0) {
+            outputChannel.appendLine(`\n✓ Make target '${targetName}' completed successfully`);
+          } else {
+            outputChannel.appendLine(`\n✗ Make target '${targetName}' failed with code ${code}`);
+          }
+        });
+        
+        // Show output channel only if configured to show terminal
+        if (showTerminal) {
+          outputChannel.show(true);
+        }
+        
+        vscode.window.showInformationMessage(`Running make ${targetName}...`);
+        
+      } catch (error) {
+        vscode.window.showErrorMessage(`Failed to run make: ${error}`);
+        if (typeof target !== "string") {
+          target.setRunning(false);
+          makefileProvider.refresh();
+        }
+      }
     }
   );
+  
+  vscode.commands.registerCommand(
+    "makefileRunner.stopTarget",
+    (target: MakeTarget) => {
+      const targetName = target.label;
+      const process = runningProcesses.get(targetName);
+      
+      if (process) {
+        // Kill the process group
+        try {
+          process.kill("SIGTERM");
+          runningProcesses.delete(targetName);
+          target.setRunning(false);
+          makefileProvider.refresh();
+          vscode.window.showInformationMessage(`Stopped make ${targetName}`);
+        } catch (error) {
+          vscode.window.showErrorMessage(`Failed to stop make: ${error}`);
+        }
+      }
+    }
+  );
+  
   vscode.commands.registerCommand(
     "makefileRunner.openTarget",
     async (target: MakeTarget) => {
@@ -109,6 +218,20 @@ export function activate(context: vscode.ExtensionContext) {
   setTimeout(() => {
     updateMakefileContext();
   }, 100);
+  
+  // Clean up running processes on deactivation
+  context.subscriptions.push({
+    dispose: () => {
+      runningProcesses.forEach((process, name) => {
+        try {
+          process.kill("SIGTERM");
+        } catch (error) {
+          console.error(`Failed to kill process ${name}:`, error);
+        }
+      });
+      runningProcesses.clear();
+    }
+  });
 }
 
 class MakefileTreeProvider implements vscode.TreeDataProvider<MakeTarget> {
@@ -118,6 +241,7 @@ class MakefileTreeProvider implements vscode.TreeDataProvider<MakeTarget> {
     this._onDidChangeTreeData.event;
 
   private targets: Array<{ name: string; line: number }> = [];
+  private targetObjects: Map<string, MakeTarget> = new Map();
 
   refresh(): void {
     const workspaceFolders = vscode.workspace.workspaceFolders;
@@ -164,9 +288,17 @@ class MakefileTreeProvider implements vscode.TreeDataProvider<MakeTarget> {
       }
     }
 
-    return Promise.resolve(
-      this.targets.map((t) => new MakeTarget(t.name, t.line))
-    );
+    // Reuse existing target objects to maintain state
+    const targetItems = this.targets.map((t) => {
+      let targetObj = this.targetObjects.get(t.name);
+      if (!targetObj) {
+        targetObj = new MakeTarget(t.name, t.line);
+        this.targetObjects.set(t.name, targetObj);
+      }
+      return targetObj;
+    });
+
+    return Promise.resolve(targetItems);
   }
 
   private extractTargets(
@@ -191,6 +323,8 @@ class MakefileTreeProvider implements vscode.TreeDataProvider<MakeTarget> {
 }
 
 class MakeTarget extends vscode.TreeItem {
+  private isRunning: boolean = false;
+
   constructor(
     public readonly label: string,
     public readonly lineNumber: number
@@ -204,13 +338,34 @@ class MakeTarget extends vscode.TreeItem {
       arguments: [this],
     };
 
-    this.iconPath = new vscode.ThemeIcon("tools"); // 🔧 icon like npm scripts
-
-    // IMPORTANT: Set contextValue to enable inline actions
-    this.contextValue = "makeTarget";
+    this.updateIcon();
 
     // Optional: Set tooltip
     this.tooltip = `Click to open in Makefile, or use play button to run make ${label}`;
+  }
+
+  setRunning(running: boolean) {
+    this.isRunning = running;
+    this.updateIcon();
+    this.updateContextValue();
+  }
+
+  private updateIcon() {
+    if (this.isRunning) {
+      // Use sync icon with color for running state
+      this.iconPath = new vscode.ThemeIcon(
+        "sync~spin",
+        new vscode.ThemeColor("charts.blue")
+      );
+    } else {
+      // Use tools icon for idle state
+      this.iconPath = new vscode.ThemeIcon("tools");
+    }
+  }
+
+  private updateContextValue() {
+    // IMPORTANT: Set contextValue to enable inline actions
+    this.contextValue = this.isRunning ? "makeTargetRunning" : "makeTarget";
   }
 }
 
